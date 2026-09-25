@@ -47,6 +47,7 @@ struct SPendingHud {
 
 constexpr GLint HUD_TEXTURE_UNIT   = 7;
 constexpr GLint ATLAS_TEXTURE_UNIT = 6;
+constexpr GLint CURSOR_TEXTURE_UNIT = 5;
 constexpr int   MAX_HUD_REGIONS    = 4;
 
 void bindOnUnit(const SP<Render::ITexture>& texture, GLint unit) {
@@ -218,6 +219,15 @@ void applyPendingHud() {
     const auto SHADER = Render::GL::g_pHyprOpenGL->m_finalScreenShader;
     if (!SHADER || !SHADER->program())
         return;
+
+    // Reset per output/frame, including frames where the cursor is hidden or
+    // hardware-rendered. The texture pass fills this only for a software cursor.
+    const auto CURSORRECT = glGetUniformLocation(SHADER->program(), "cursorRect");
+    if (CURSORRECT >= 0) {
+        const auto PREVIOUS = Render::GL::g_pHyprOpenGL->useShader(SHADER);
+        glUniform4f(CURSORRECT, 0.F, 0.F, 0.F, 0.F);
+        Render::GL::g_pHyprOpenGL->useShader(PREVIOUS);
+    }
     const auto RECT    = glGetUniformLocation(SHADER->program(), "hudRect");
     const auto SAMPLER = glGetUniformLocation(SHADER->program(), "hudTex");
     if (RECT < 0 || SAMPLER < 0)
@@ -269,6 +279,31 @@ void applyPendingHud() {
 
 void discardPendingHud() {
     pendingHud = {};
+}
+
+bool composeCursorLast(const SP<Render::ITexture>& texture, const CBox& box) {
+    if (!installed || !Render::GL::g_pHyprOpenGL || !texture || !texture->m_texID || box.empty() ||
+        g_pHyprRenderer->m_renderMode != Render::RENDER_MODE_NORMAL || g_pHyprRenderer->m_renderData.blockScreenShader ||
+        g_pHyprRenderer->m_renderData.currentFB != g_pHyprRenderer->m_renderData.mainFB)
+        return false;
+
+    const auto SHADER = Render::GL::g_pHyprOpenGL->m_finalScreenShader;
+    if (!SHADER || SHADER->program() != installedProgram)
+        return false;
+    const auto RECT = glGetUniformLocation(SHADER->program(), "cursorRect");
+    const auto SAMPLER = glGetUniformLocation(SHADER->program(), "cursorTex");
+    if (RECT < 0 || SAMPLER < 0)
+        return false;
+
+    GLint previousUnit = GL_TEXTURE0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousUnit);
+    bindOnUnit(texture, CURSOR_TEXTURE_UNIT);
+    glActiveTexture(previousUnit);
+    const auto PREVIOUS = Render::GL::g_pHyprOpenGL->useShader(SHADER);
+    glUniform4f(RECT, box.x, box.y, box.width, box.height);
+    glUniform1i(SAMPLER, CURSOR_TEXTURE_UNIT);
+    Render::GL::g_pHyprOpenGL->useShader(PREVIOUS);
+    return true;
 }
 
 bool updateMinimap(const SMinimapData& data) {

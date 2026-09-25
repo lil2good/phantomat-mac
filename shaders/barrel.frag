@@ -46,6 +46,19 @@ uniform vec4 hudAtlasRects[MAX_HUD_REGIONS]; // device px, top-left origin
 uniform vec4 hudAtlasUVs[MAX_HUD_REGIONS];   // x, y, w, h in the atlas
 uniform int hudAtlasCount;
 
+uniform sampler2D cursorTex;
+uniform vec4 cursorRect;
+
+vec4 composeCursor(vec4 base) {
+    if (cursorRect.z <= 0.0 || cursorRect.w <= 0.0)
+        return base;
+    vec2 uv = (gl_FragCoord.xy - cursorRect.xy) / cursorRect.zw;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return base;
+    vec4 cursor = texture(cursorTex, uv);
+    return vec4(base.rgb * (1.0 - cursor.a) + cursor.rgb, base.a);
+}
+
 float roundedDistance(vec2 point, vec4 rect, float radius) {
     vec2 halfSize = rect.zw * 0.5;
     vec2 centered = point - (rect.xy + halfSize);
@@ -219,5 +232,5 @@ void main() {
         color = vec4(rgb * edgeAlpha * shade, texture(tex, clamp(uv, 0.0, 1.0)).a);
     }
 
-    fragColor = composeHud(composeHudAtlas(composeMinimap(color)));
+    fragColor = composeCursor(composeHud(composeHudAtlas(composeMinimap(color))));
 }

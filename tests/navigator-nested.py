@@ -39,7 +39,30 @@ class Nested:
         r = subprocess.run(["hyprctl", "-i", self.sig, *args], capture_output=True, text=True, timeout=8)
         if check and (r.returncode or r.stdout.startswith("error")):
             raise RuntimeError(f"hyprctl {' '.join(args)}: {r.stdout.strip()} {r.stderr.strip()}")
+        if args[:3] == ("output", "create", "wayland"):
+            self.fix_output_size()
         return r.stdout.strip()
+
+    def fix_output_size(self):
+        if not os.environ.get("NESTED_FIXED_SIZE"):
+            return
+        parent = os.environ["HYPRLAND_INSTANCE_SIGNATURE"]
+        width, height = map(int, os.environ.get("NESTED_MODE", "1280x720@60").split("@")[0].split("x"))
+        for _ in range(20):
+            clients = json.loads(subprocess.check_output(["hyprctl", "-i", parent, "clients", "-j"], text=True))
+            windows = [c for c in clients if c["pid"] == self.proc.pid]
+            if windows:
+                for client in windows:
+                    selector = "address:" + client["address"]
+                    if not client["floating"]:
+                        expr = f'hl.dsp.window.float({{action="toggle",window="{selector}"}})'
+                        subprocess.run(["hyprctl", "-i", parent, "dispatch", expr], check=True, capture_output=True)
+                    expr = f'hl.dsp.window.resize({{x={width},y={height},window="{selector}"}})'
+                    subprocess.run(["hyprctl", "-i", parent, "dispatch", expr], check=True, capture_output=True)
+                time.sleep(0.5)
+                return
+            time.sleep(0.1)
+        raise RuntimeError("Could not size the nested compositor's window")
 
     def dispatch(self, expr):
         return self.ctl("dispatch", expr)
@@ -75,6 +98,8 @@ class Nested:
         cfg = cfg.replace("@PLUGIN@", str(self.plugin))
         cfg = cfg.replace('mode = "1280x720@60",', f'mode = "{os.environ.get("NESTED_MODE", "1280x720@60")}",')
         cfg = cfg.replace("scale = 1,", f"scale = {os.environ.get('NESTED_SCALE', '1')},", 1)
+        if os.environ.get("NESTED_SOFTWARE_CURSOR") == "1":
+            cfg += '\nhl.config({cursor={no_hardware_cursors=1}})\n'
         cfg += "\nif plugin_loaded then\n hl.config({plugin={spatialoverview={canvas={persistent=true,hover_focus=true,space_pan=false,initial_zoom=0.5,grid_size=46,background_dim=0.6,grid_opacity=0.3" + self.extra + "},distortion={strength=0.24}}}})\n"
         if self.test_binds:
             cfg += ' hl.bind("SUPER + CTRL + G", hl.plugin.spatialoverview.overview("toggle all"))\n'
@@ -103,6 +128,7 @@ class Nested:
             time.sleep(0.1)
         if not self.sig:
             raise RuntimeError("nested compositor did not register")
+        self.fix_output_size()
         errors = self.ctl("configerrors", check=False)
         if errors:
             raise RuntimeError("config errors: " + errors)
@@ -126,6 +152,8 @@ class Nested:
                 self.proc.terminate()
         if getattr(self, "log", None):
             self.log.close()
+            self.shots.mkdir(parents=True, exist_ok=True)
+            (self.shots / f"hyprland-{self.sig}.log").write_bytes(Path(self.log.name).read_bytes())
 
 
 def restored_x(restored, n, address):

@@ -29,7 +29,7 @@ def activate(app):
     win.set_default_size(100, 30)
     provider = Gtk.CssProvider()
     provider.load_from_data(CSS)
-    Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
     win.present()
 
 

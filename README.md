@@ -1,4 +1,10 @@
-# Phantomat
+# Phantomat Mac
+
+Apple Silicon / ARM64 Linux fork of [Phantomat](https://github.com/kaolti/phantomat),
+tested on a MacBook Pro running Arch/Omarchy and Hyprland 0.56.2. This is
+**not a macOS application**. See [the session-only setup](examples/omarchy-mac/README.md)
+for the tested configuration, Super+Tab bindings, and canvas-aware bar widget.
+
 
 A zoomable, infinite-canvas window manager for Hyprland. Every window lives
 on one endless plane instead of in workspaces. Press a key and the view pulls
@@ -101,6 +107,7 @@ them too.
 | Middle-drag | Pan the canvas. |
 | `CTRL` + wheel, pinch | Zoom. |
 | `SUPER` + left-drag, right-drag | Move, resize a window. |
+| Hold `SHIFT` while moving a window | Snap to the canvas grid; the highlighted drop zone previews the landing position. Release `SHIFT` for free placement. |
 
 ### In the zoomed-out canvas
 
@@ -159,6 +166,7 @@ Everything can also be set in `~/.config/hypr/spatialoverview.lua` (then
 | `canvas.arrange_resize_limit` | Maximum relative resize applied to any window by smart arrangement |
 | `canvas.auto_float` | Detach existing and new app windows from tiling |
 | `canvas.auto_place` | Place newly managed windows near the active camera |
+| `canvas.auto_fill` | Place new app windows at their final usable-screen size in the nearest free grid area, preserving bars; default false. Child dialogs keep their size. Super+T restores the previous size. |
 | `canvas.placement_gap` | Collision gap used by automatic placement |
 | `input.pan_sensitivity` | Middle-drag camera sensitivity (and optional Space-drag sensitivity) |
 | `input.drag_threshold` | Pixels before a click becomes a drag |
@@ -173,7 +181,7 @@ Everything can also be set in `~/.config/hypr/spatialoverview.lua` (then
 | `distortion.transition_power` | When the lens eases in during the zoom animation (1 follows the zoom) |
 | `canvas.grid_*` | Shared snap/render spacing, width, opacity, line/dot style, and dot diameter |
 | `canvas.background_dim` | Dark overlay behind the grid and windows in navigation mode |
-| `canvas.snap_enabled` / `snap_size` | Snap free window placement to the canvas grid, and its step in pixels |
+| `canvas.snap_enabled` / `snap_size` | Enable Shift-to-snap while dragging. Snapping uses `canvas.grid_size`; `snap_size` is retained for compatibility. |
 | `canvas.remember_layout` | Remember window positions and cameras across restarts and reopenings |
 | `navigator.enabled` | Type-to-search palette in the zoomed-out canvas |
 | `navigator.labels` | Window titles on the map |

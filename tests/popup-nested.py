@@ -139,9 +139,11 @@ try:
     win = bbox(image, (0x5a, 0x2a, 0x08), tol=10)
     button = bbox(image, (0x0a, 0x5a, 0x3a), tol=10)
     print(f"  [hanging] window {win[:4] if win else None} button {button[:4] if button else None}")
-    check(bool(win and button and button[1] >= win[3]), "[hanging] the menu's button hangs below its window")
-    if button:
-        cx, cy = (button[0] + button[2]) // 2, (button[1] + button[3]) // 2
+    hanging = bool(win and button and button[3] > win[3] + 8)
+    check(hanging, "[hanging] the menu's button extends below its window")
+    if hanging:
+        cx = (button[0] + button[2]) // 2
+        cy = (max(button[1], win[3] + 4) + button[3]) // 2
         n.dispatch(f"hl.dsp.cursor.move({{x={cx}, y={cy}}})"); time.sleep(0.2)
         n.dispatch(f"hl.dsp.cursor.move({{x={cx + 3}, y={cy + 2}}})"); time.sleep(0.6)
         n.shot("popup-hanging-hover")

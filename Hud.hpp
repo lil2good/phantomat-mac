@@ -71,9 +71,8 @@ namespace SpatialOverview::Hud {
     };
     bool chrome(const SPaletteView& view, SChrome& out);
 
-    // Where the selected window should sit (logical y from the monitor top)
-    // so the palette, even with a full result list, never covers it.
-    double selectionFocusY(const Vector2D& monitorSize);
+    // Space below the visible palette, in monitor-local logical coordinates.
+    CBox selectionViewport(const Vector2D& monitorSize);
 
     // Hit test against the last palette drawn, in monitor device pixels:
     // a result index, PALETTE_PANEL for the rest of the palette, or

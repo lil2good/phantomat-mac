@@ -2,7 +2,7 @@
 # setting project_dir.
 
 hyprland_session() {
-  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && hyprctl instances >/dev/null 2>&1
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && hyprctl version >/dev/null 2>&1
 }
 
 spatialoverview_loaded() {

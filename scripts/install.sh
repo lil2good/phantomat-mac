@@ -63,6 +63,11 @@ fi
 
 # ---- build and install ----------------------------------------------------------
 
+was_running=0
+if hyprland_session && spatialoverview_loaded; then
+  was_running=1
+fi
+
 say "Building Phantomat for Hyprland $headers"
 make -C "$project_dir" -j"$(nproc)" all
 mkdir -p "$data_dir"
@@ -108,12 +113,12 @@ if ((!hooked)); then
   exit 0
 fi
 
-was_running=0
-if spatialoverview_loaded; then
-  was_running=1
+if ((was_running)) && spatialoverview_loaded; then
   remember_canvas_layout
   safe_unload || fail "the new build is installed and loads at your next login."
-  hyprctl plugin load "$plugin" >/dev/null
+  if ! spatialoverview_loaded; then
+    hyprctl plugin load "$plugin" >/dev/null || spatialoverview_loaded || fail "Hyprland could not load the rebuilt plugin."
+  fi
 fi
 hyprctl reload >/dev/null
 sleep 0.5

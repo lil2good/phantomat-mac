@@ -16,7 +16,6 @@ ROOT = os.path.dirname(HERE)
 subprocess.run(["make", "-s", "-C", ROOT, "test-tools"], check=True)
 
 SCALE = float(os.environ.get("NESTED_SCALE", "1"))
-W, H = int(1280 / SCALE), int(720 / SCALE)   # logical size of the nested output
 log = tempfile.mktemp(prefix="x11-menu-", suffix=".log")
 n = nav.Nested(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, ".build/dev/spatialoverview.so"), os.path.join(ROOT, ".build/shots-x11"),
                extra_lua="\nhl.config({xwayland={force_zero_scaling=true}})\n")
@@ -48,7 +47,10 @@ def bbox(image, rgb, tol=10):
 
 
 def mouse(*cmds):
-    subprocess.run([os.path.join(ROOT, ".build/vpointer"), str(W), str(H), *map(str, cmds)], env=n.env(), check=True, timeout=20)
+    monitor = json.loads(n.ctl("-j", "monitors"))[0]
+    width = round(monitor["width"] / monitor["scale"])
+    height = round(monitor["height"] / monitor["scale"])
+    subprocess.run([os.path.join(ROOT, ".build/vpointer"), str(width), str(height), *map(str, cmds)], env=n.env(), check=True, timeout=20)
 
 
 def events():
@@ -76,6 +78,7 @@ try:
         land()
         real = next(c for c in n.clients() if c["title"] == "x11-test")
         image = frame()
+        print(f"  output: {image[0]}x{image[1]} pixels, scale {SCALE}", flush=True)
         win = bbox(image, (0x5a, 0x2a, 0x08))
         print(f"  [{case}] real {real['at']} {real['size']} drawn(px) {win}")
         if not win:

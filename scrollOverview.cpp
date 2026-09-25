@@ -2266,6 +2266,11 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
             return;
         }
 
+        if ((KEYSYM == XKB_KEY_Shift_L || KEYSYM == XKB_KEY_Shift_R) && g_pointerGrabOverview && g_pointerGrabOverview->dragActiveWindow) {
+            g_pointerGrabOverview->updateWindowDrag();
+            return;
+        }
+
         // Release bookkeeping is global: it must happen even if the press was
         // handled by another output's canvas or a panel has taken focus since.
         if (event.state == WL_KEYBOARD_KEY_STATE_RELEASED) {
@@ -3459,6 +3464,8 @@ void CScrollOverview::toggleCanvasNavigation() {
         zoomCanvasAt(CENTER, ScrollOverview::Config::getCanvasInitialZoom(), true);
         *transitionProgress = 1.F;
         beginNavigatorSession();
+        if (showsNavigatorHud())
+            followNavigatorSelection();
         if (navigatorOwnsPointer()) {
             // Applications stop receiving the pointer while the navigator
             // owns it; tell the one under it that the pointer left, and that
@@ -4531,6 +4538,14 @@ bool CScrollOverview::followCanvasWindow(PHLWINDOW window, bool syncFocus, bool 
     if (syncFocus && Desktop::focusState()->monitor() != MONITOR)
         Desktop::focusState()->rawMonitorFocus(MONITOR);
 
+    if (showsNavigatorHud()) {
+        const auto viewport = SpatialOverview::Hud::selectionViewport(MONITOR->m_size);
+        const auto box = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+        const float fit = std::min(viewport.width / std::max(1.0, box.width + 16.0), viewport.height / std::max(1.0, box.height + 16.0));
+        *scale = std::min(ScrollOverview::Config::getCanvasInitialZoom(), fit);
+        if (!animate)
+            scale->setValueAndWarp(scale->goal());
+    }
     const auto CAMERAOFFSET = canvasCameraOffsetFor(window, scale->goal(), canvasNavigationActive);
     if (animate)
         *viewOffset = CAMERAOFFSET;
@@ -4577,7 +4592,9 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
         TARGET->warpPositionSize();
         return true;
     }
-    if (placeNew && ScrollOverview::Config::getCanvasRememberLayout()) {
+    const bool AUTO_FILL = placeNew && ScrollOverview::Config::getCanvasAutoFill() && !window->parent() &&
+        TARGET->floating() && !Fullscreen::controller()->isFullscreen(window);
+    if (placeNew && !AUTO_FILL && ScrollOverview::Config::getCanvasRememberLayout()) {
         if (const auto HOME = SpatialOverview::Memory::claim(window, Time::steadyNow() < g_canvasMemoryRestoreUntil)) {
             TARGET->rememberFloatingSize(HOME->size());
             TARGET->setPositionGlobal(*HOME);
@@ -4599,42 +4616,50 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
     if (SIZE.x <= 1.F || SIZE.y <= 1.F || SIZE.x > MONITOR->m_size.x * 0.9F || SIZE.y > MONITOR->m_size.y * 0.9F)
         SIZE = MONITOR->m_size * 0.42F;
 
+    const auto RESTORE_SIZE = SIZE;
+    if (AUTO_FILL)
+        SIZE = canvasFillArea(MONITOR, window).size();
+
     const auto CENTERPX    = CBox{{}, MONITOR->m_size * MONITOR->m_scale}.middle();
     const auto WORLDCENTER = overviewPointToGlobal(0, CENTERPX);
     const float GAP        = sc<float>(ScrollOverview::Config::getCanvasPlacementGap());
-    const float STEPX      = SIZE.x + GAP;
-    const float STEPY      = SIZE.y + GAP;
-    CBox       PLACEMENT{WORLDCENTER - SIZE / 2.F, SIZE};
+    const auto ORIGIN = snapCanvasWindowBox(CBox{WORLDCENTER - SIZE / 2.F, SIZE}, MONITOR);
+    const double GRID = ScrollOverview::Config::getCanvasSnapEnabled() ? ScrollOverview::Config::getCanvasSnapSize() : 1.0;
+    std::vector<CBox> occupied;
+    std::vector<double> xs{ORIGIN.x}, ys{ORIGIN.y};
+    for (const auto& existingRef : Desktop::windowState()->windows()) {
+        const auto EXISTING = getOverviewWindowToShow(existingRef);
+        if (!shouldShowOverviewWindow(EXISTING) || EXISTING == window || !EXISTING->layoutTarget())
+            continue;
+        auto box = EXISTING->layoutTarget()->position();
+        box.expand(GAP);
+        occupied.push_back(box);
+        xs.push_back(std::ceil((box.x + box.width) / GRID) * GRID);
+        xs.push_back(std::floor((box.x - SIZE.x) / GRID) * GRID);
+        ys.push_back(std::ceil((box.y + box.height) / GRID) * GRID);
+        ys.push_back(std::floor((box.y - SIZE.y) / GRID) * GRID);
+    }
 
-    const auto occupied = [&](const CBox& candidate) {
-        for (const auto& existingRef : Desktop::windowState()->windows()) {
-            const auto EXISTING = getOverviewWindowToShow(existingRef);
-            if (!shouldShowOverviewWindow(EXISTING) || EXISTING == window || !EXISTING->layoutTarget())
+    // The nearest free grid rectangle lies at the preferred point or beside
+    // an occupied edge. Test those boundaries using the final window size.
+    CBox PLACEMENT = ORIGIN;
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const auto x : xs) {
+        for (const auto y : ys) {
+            const CBox candidate{x, y, SIZE.x, SIZE.y};
+            const double distance = candidate.pos().distanceSq(ORIGIN.pos());
+            if (distance >= nearest || std::ranges::any_of(occupied, [&](const CBox& box) {
+                    return candidate.x < box.x + box.width && candidate.x + candidate.width > box.x &&
+                        candidate.y < box.y + box.height && candidate.y + candidate.height > box.y;
+                }))
                 continue;
-            auto BOX = EXISTING->layoutTarget()->position();
-            BOX.expand(GAP * 0.5F);
-            if (BOX.overlaps(candidate))
-                return true;
-        }
-        return false;
-    };
-
-    bool found = !occupied(PLACEMENT);
-    for (int ring = 1; !found && ring <= 16; ++ring) {
-        std::vector<Vector2D> OFFSETS{
-            {sc<float>(ring), 0.F}, {-sc<float>(ring), 0.F}, {0.F, sc<float>(ring)}, {0.F, -sc<float>(ring)},
-            {sc<float>(ring), sc<float>(ring)}, {-sc<float>(ring), sc<float>(ring)}, {sc<float>(ring), -sc<float>(ring)}, {-sc<float>(ring), -sc<float>(ring)},
-        };
-        for (const auto& offset : OFFSETS) {
-            PLACEMENT = CBox{WORLDCENTER - SIZE / 2.F + Vector2D{offset.x * STEPX, offset.y * STEPY}, SIZE};
-            if (!occupied(PLACEMENT)) {
-                found = true;
-                break;
-            }
+            nearest = distance;
+            PLACEMENT = candidate;
         }
     }
 
-    PLACEMENT = snapCanvasWindowBox(PLACEMENT, MONITOR);
+    if (AUTO_FILL)
+        g_canvasFill[window.get()] = {.window = window, .before = CBox{PLACEMENT.middle() - RESTORE_SIZE / 2.0, RESTORE_SIZE}, .filled = PLACEMENT};
     TARGET->rememberFloatingSize(PLACEMENT.size());
     TARGET->setPositionGlobal(PLACEMENT);
     TARGET->warpPositionSize();
@@ -4975,11 +5000,18 @@ void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
         return;
     }
 
+    const bool POINTERMOVED = g_pSeatManager->m_state.pointerFocus != SURFACE || canvasForwardedPointerSurface != SURFACE ||
+        canvasForwardedPointerLocal != SURFACELOCAL;
     canvasForwardedPointerWindow  = WINDOW;
     canvasForwardedPointerSurface = SURFACE;
+    canvasForwardedPointerLocal   = SURFACELOCAL;
     g_pSeatManager->setPointerFocus(SURFACE, SURFACELOCAL);
-    g_pSeatManager->sendPointerMotion(timeMs ? timeMs : Time::millis(Time::steadyNow()), SURFACELOCAL);
-    g_pSeatManager->sendPointerFrame();
+    // A stationary pointer needs no motion frame. Inserting one before each
+    // axis event changes Chromium's touchpad velocity and fling calculation.
+    if (POINTERMOVED) {
+        g_pSeatManager->sendPointerMotion(timeMs ? timeMs : Time::millis(Time::steadyNow()), SURFACELOCAL);
+        g_pSeatManager->sendPointerFrame();
+    }
 
     if (ScrollOverview::Config::getCanvasHoverFocus() && !(canvasNavigationActive && SpatialOverview::Navigator::isOpen()) && !hoverFocusSettling &&
         canvasForwardedPointerButtons.empty() && WINDOW != PREVIOUSWINDOW) {
@@ -5037,7 +5069,14 @@ bool CScrollOverview::forwardCanvasPointerAxis(const IPointer::SAxisEvent& event
     // 120 again for the v120 axis, makes every notch scroll about 120 lines.
     const bool wheel = event.source == WL_POINTER_AXIS_SOURCE_WHEEL || event.source == WL_POINTER_AXIS_SOURCE_WHEEL_TILT;
     if (!wheel) {
-        g_pSeatManager->sendPointerAxis(event.timeMs, event.axis, event.delta, event.deltaDiscrete, 0, event.source, event.relativeDirection);
+        const bool touchpad = event.source == WL_POINTER_AXIS_SOURCE_FINGER;
+        double factor = std::max(0.F, ScrollOverview::Config::getValue<float>(touchpad ? "input:touchpad:scroll_factor" : "input:scroll_factor"));
+        const auto window = canvasForwardedPointerWindow.lock();
+        if (touchpad && window->isScrollTouchpadOverridden())
+            factor = window->getScrollTouchpad();
+        else if (!touchpad && window->isScrollMouseOverridden())
+            factor = window->getScrollMouse();
+        g_pSeatManager->sendPointerAxis(event.timeMs, event.axis, event.delta * factor, 0, 0, event.source, event.relativeDirection);
         g_pSeatManager->sendPointerFrame();
         return true;
     }
@@ -5088,6 +5127,20 @@ Vector2D CScrollOverview::canvasCellAtOverviewPoint(const Vector2D& point) const
         ACTIVECELL.x + std::floor(WORLDPOINT.x / std::max(MONITOR->m_size.x, 1.0)),
         ACTIVECELL.y + std::floor(WORLDPOINT.y / std::max(MONITOR->m_size.y, 1.0)),
     };
+}
+
+bool CScrollOverview::canvasDragSnapActive() const {
+    return ScrollOverview::Config::getCanvasEnabled() && ScrollOverview::Config::getCanvasAllowWindowOverflow() &&
+        ScrollOverview::Config::getCanvasSnapEnabled() && (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_SHIFT);
+}
+
+CBox CScrollOverview::canvasDragDropBox(size_t workspaceIdx, const CBox& screenBox) const {
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR || screenBox.empty())
+        return {};
+    const float FACTOR = std::max(scale->value(), 0.01F) * std::max(MONITOR->m_scale, 0.01F);
+    const CBox BOX{overviewPointToGlobal(workspaceIdx, screenBox.pos()), screenBox.size() / FACTOR};
+    return canvasDragSnapActive() ? snapCanvasWindowBox(BOX, MONITOR) : BOX;
 }
 
 CBox CScrollOverview::snapCanvasWindowBox(const CBox& box, PHLMONITOR monitor) const {
@@ -6109,7 +6162,7 @@ void CScrollOverview::endWindowDrag() {
             auto       GLOBALBOX  = dropWorkspaceFullyVisible || FREECANVAS ? CBox{dropOverview->overviewPointToGlobal(dropWorkspaceIdx, DRAGBOX.pos()), GLOBALSIZE} :
                                                                               centerBoxInWorkspace(CBox{Vector2D{}, GLOBALSIZE}, DROPWORKSPACE, DROPMONITOR);
             if (FREECANVAS)
-                GLOBALBOX = dropOverview->snapCanvasWindowBox(GLOBALBOX, DROPMONITOR);
+                GLOBALBOX = dropOverview->canvasDragDropBox(dropWorkspaceIdx, DRAGBOX);
             if (dropWorkspaceFullyVisible && !FREECANVAS)
                 GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, DROPWORKSPACE, DROPMONITOR, WINDOW->getRealBorderSize());
 
@@ -6131,7 +6184,7 @@ void CScrollOverview::endWindowDrag() {
         if (!ScrollOverview::Config::getCanvasEnabled() || !ScrollOverview::Config::getCanvasAllowWindowOverflow())
             GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, WORKSPACE, MONITOR, WINDOW->getRealBorderSize());
         else
-            GLOBALBOX = snapCanvasWindowBox(GLOBALBOX, MONITOR);
+            GLOBALBOX = dropOverview->canvasDragDropBox(dropWorkspaceIdx, DRAGBOX);
 
         TARGET->damageEntire();
         TARGET->setPositionGlobal(GLOBALBOX);
@@ -6624,9 +6677,9 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
         if (Desktop::focusState()->monitor() != MONITOR)
             Desktop::focusState()->rawMonitorFocus(MONITOR);
 
-        *viewOffset = canvasCameraOffsetFor(bestCandidate, scale->goal(), canvasNavigationActive);
         if (canvasNavigationActive)
             SpatialOverview::Navigator::selectWindow(bestCandidate);
+        followCanvasWindow(bestCandidate, false, true);
         markBlurDirty();
 
         damage();
@@ -7803,6 +7856,53 @@ void CScrollOverview::renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, 
     };
 
     renderWindowLive(monitor, WINDOW, windowBox, dragOwner->scale->value(), now, nullptr, true);
+
+    if (!isCanvasDesktop() || !canvasDragSnapActive() || scrollOverviewAt(g_pInputManager->getMouseCoordsInternal()).get() != this)
+        return;
+
+    const auto IDX = dragWorkspaceIndex(WINDOW);
+    const auto DRAGBOX = draggedWindowBoxFor(WINDOW, IDX, getOverviewMousePosLocal(monitor), dragOwner->dragGrabRatio);
+    const auto WORLD = canvasDragDropBox(IDX, DRAGBOX);
+    if (WORLD.empty())
+        return;
+    const auto SCREEN = canvasWorldToScreen(WORLD);
+    const CBox ZONE{(SCREEN.pos() - monitor->m_position) * monitor->m_scale, SCREEN.size() * monitor->m_scale};
+    const float S = monitor->m_scale;
+    const auto ACCENT = SpatialOverview::Hud::theme().accent;
+
+    CRectPassElement::SRectData fill;
+    fill.box = ZONE.copy().round();
+    fill.color = ACCENT.modifyA(0.10F);
+    fill.round = std::round(8.F * S);
+    fill.roundingPower = 2.F;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(fill));
+
+    for (const auto& [width, alpha] : {std::pair{7.F, 0.10F}, std::pair{2.F, 0.85F}}) {
+        CBorderPassElement::SBorderData border;
+        border.box = ZONE.copy().round();
+        border.grad1 = Config::CGradientValueData{ACCENT};
+        border.a = alpha;
+        border.borderSize = std::max(1, sc<int>(std::round(width * S)));
+        border.round = std::round(8.F * S);
+        border.outerRound = border.round;
+        border.roundingPower = 2.F;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(border));
+    }
+    const double LENGTH = std::min({18.0 * S, ZONE.width / 4.0, ZONE.height / 4.0});
+    const double THICK = 3.0 * S;
+    for (const bool right : {false, true}) {
+        for (const bool bottom : {false, true}) {
+            const double X = right ? ZONE.x + ZONE.width : ZONE.x;
+            const double Y = bottom ? ZONE.y + ZONE.height : ZONE.y;
+            for (const CBox& BOX : {CBox{right ? X - LENGTH : X, Y - THICK / 2, LENGTH, THICK},
+                                   CBox{X - THICK / 2, bottom ? Y - LENGTH : Y, THICK, LENGTH}}) {
+                CRectPassElement::SRectData corner;
+                corner.box = BOX.copy().round();
+                corner.color = ACCENT.modifyA(1.F);
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(corner));
+            }
+        }
+    }
 }
 
 bool CScrollOverview::hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const {
@@ -9557,8 +9657,11 @@ Vector2D CScrollOverview::canvasCameraOffsetFor(const PHLWINDOW& window, float z
     if (navigating) {
         // Keep the selection clear of the search palette above it.
         if (showsNavigatorHud())
-            target.y -= (SpatialOverview::Hud::selectionFocusY(MONITOR->m_size) - MONITOR->m_size.y * 0.5) / std::max(zoom, 0.01F);
+            target.y -= (SpatialOverview::Hud::selectionViewport(MONITOR->m_size).middle().y - MONITOR->m_size.y * 0.5) / std::max(zoom, 0.01F);
     } else {
+        if (const auto it = g_canvasFill.find(window.get()); it != g_canvasFill.end() &&
+            it->second.window.lock() == window && BOX.size().distanceSq(it->second.filled.size()) < 1.0)
+            target -= (canvasFillArea(MONITOR, window).middle() - MONITOR->logicalBox().middle()) / std::max(zoom, 0.01F);
         // At 100% an oversized window keeps its top-left corner on screen,
         // where title bars, tabs and menus live.
         if (BOX.width > MONITOR->m_size.x)
@@ -9820,12 +9923,12 @@ void CScrollOverview::fitAllWindows() {
         toggleCanvasNavigation();
 
     const bool  HUD       = showsNavigatorHud();
-    const float USABLEH   = MONITOR->m_size.y * (HUD ? 0.74F : 0.9F);
-    const float ZOOM      = std::clamp(std::min(sc<float>(MONITOR->m_size.x * 0.9F / bounds->width), sc<float>(USABLEH / bounds->height)),
+    const auto  AVAILABLE = HUD ? SpatialOverview::Hud::selectionViewport(MONITOR->m_size).size() : MONITOR->m_size * 0.9F;
+    const float ZOOM      = std::clamp(std::min(sc<float>(AVAILABLE.x / bounds->width), sc<float>(AVAILABLE.y / bounds->height)),
                                        ScrollOverview::Config::getCanvasMinZoom(), std::min(0.9F, ScrollOverview::Config::getCanvasMaxZoom()));
     auto        target    = bounds->middle();
     if (HUD)
-        target.y -= (SpatialOverview::Hud::selectionFocusY(MONITOR->m_size) - MONITOR->m_size.y * 0.5) / ZOOM;
+        target.y -= (SpatialOverview::Hud::selectionViewport(MONITOR->m_size).middle().y - MONITOR->m_size.y * 0.5) / ZOOM;
     *viewOffset = target - MONITOR->m_position - MONITOR->m_size * 0.5F;
     *scale      = ZOOM;
     markBlurDirty();
@@ -9834,10 +9937,19 @@ void CScrollOverview::fitAllWindows() {
 
 void CScrollOverview::panCamera(const Vector2D& direction) {
     const auto MONITOR = pMonitor.lock();
+    if (MONITOR)
+        panCameraPixels(Vector2D{direction.x * MONITOR->m_size.x, direction.y * MONITOR->m_size.y} * 0.22F);
+}
+
+void CScrollOverview::panCameraPixels(const Vector2D& delta, bool animate) {
+    const auto MONITOR = pMonitor.lock();
     if (!isCanvasDesktop() || !MONITOR)
         return;
     const float ZOOM = std::max(scale->goal(), 0.01F);
-    *viewOffset      = viewOffset->goal() + Vector2D{direction.x * MONITOR->m_size.x, direction.y * MONITOR->m_size.y} * (0.22F / ZOOM);
+    if (animate)
+        *viewOffset = viewOffset->goal() + delta / ZOOM;
+    else
+        viewOffset->setValueAndWarp(viewOffset->value() + delta / ZOOM);
     markCanvasCameraActive(MONITOR);
     markBlurDirty();
     damage();
@@ -10024,9 +10136,10 @@ bool CScrollOverview::navigatorKeyAction(uint32_t keysym, uint32_t mods, const s
         // always jumps to its best hit.
         if (Navigator::queryActive()) {
             Navigator::rebuildResults(true);
-            followNavigatorSelection();
-        } else
+        } else {
             Navigator::rebuildResults(false);
+        }
+        followNavigatorSelection();
         damage();
     };
     const auto selectionMoved = [&](int delta) {
@@ -10111,6 +10224,7 @@ bool CScrollOverview::navigatorKeyAction(uint32_t keysym, uint32_t mods, const s
             if (STATE.listRevealed) {
                 STATE.listRevealed = false;
                 Navigator::touch();
+                followNavigatorSelection();
                 damage();
                 return true;
             }

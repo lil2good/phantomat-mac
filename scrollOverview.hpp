@@ -75,6 +75,7 @@ class CScrollOverview : public IOverview {
     void         revertAllNavigation();
     void         fitAllWindows();
     void         panCamera(const Vector2D& direction);
+    void         panCameraPixels(const Vector2D& delta, bool animate = true);
     void         zoomCameraBy(float factor);
     bool         nudgeWindow(PHLWINDOW window, const Vector2D& direction, bool checkpoint);
     bool         canvasRedo();
@@ -219,6 +220,8 @@ class CScrollOverview : public IOverview {
     Vector2D     canvasCellForWorkspaceIndex(size_t workspaceIdx) const;
     Vector2D     canvasCellAtOverviewPoint(const Vector2D& point) const;
     CBox         snapCanvasWindowBox(const CBox& box, PHLMONITOR monitor) const;
+    bool         canvasDragSnapActive() const;
+    CBox         canvasDragDropBox(size_t workspaceIdx, const CBox& screenBox) const;
     Vector2D  overviewPointToGlobal(size_t workspaceIdx, const Vector2D& pointLocal) const;
     CBox      draggedWindowBox(size_t workspaceIdx) const;
     CBox      draggedWindowBoxFor(PHLWINDOW window, size_t workspaceIdx, const Vector2D& pointLocal, const Vector2D& grabRatio) const;
@@ -423,6 +426,7 @@ class CScrollOverview : public IOverview {
     PHLWINDOWREF                     hoverFocusSettleWindow;
     PHLWINDOWREF                     canvasForwardedPointerWindow;
     WP<CWLSurfaceResource>           canvasForwardedPointerSurface;
+    Vector2D                        canvasForwardedPointerLocal;
     std::unordered_set<uint32_t>     canvasForwardedPointerButtons;
     uint32_t                         clientGestureButton = 0; // held button of a move/resize the app asked for
     // Leftover high-resolution wheel units, in 1/120 of a notch.

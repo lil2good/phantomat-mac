@@ -102,6 +102,9 @@ finally:
         except subprocess.TimeoutExpired:
             proc.terminate()
     log.close()
-    shutil.rmtree(tmp, ignore_errors=True)
+    if not failures:
+        shutil.rmtree(tmp, ignore_errors=True)
+    else:
+        print(f"Retained failed installation test at {tmp}", flush=True)
 print("ALL PASSED" if not failures else f"{len(failures)} FAILED")
 sys.exit(1 if failures else 0)

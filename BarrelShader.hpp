@@ -44,6 +44,8 @@ struct SHudRegion {
 bool updateHud(const SP<Render::ITexture>& texture, const std::array<float, 4>& rect, float alpha, const SP<Render::ITexture>& atlas = nullptr,
                const std::vector<SHudRegion>& regions = {});
 void applyPendingHud();
+// Keep software cursors out of the lensed frame and compose them above the HUD.
+bool composeCursorLast(const SP<Render::ITexture>& texture, const CBox& box);
 void discardPendingHud();
 
 }

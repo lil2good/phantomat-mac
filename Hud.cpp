@@ -892,11 +892,21 @@ namespace SpatialOverview::Hud {
         return true;
     }
 
-    double selectionFocusY(const Vector2D& monitorSize) {
+    CBox selectionViewport(const Vector2D& monitorSize) {
         const auto&  THEME  = theme();
-        const double TOP    = monitorSize.y * THEME.top;
-        const double BOTTOM = TOP + (THEME.panelPad * 2.0 + THEME.searchH + GAP + THEME.rows * THEME.rowH + (THEME.rows - 1) * GAP + footerHeight(THEME)) * THEME.hudScale;
-        return std::clamp((BOTTOM + monitorSize.y) / 2.0, monitorSize.y / 2.0, monitorSize.y * 0.66);
+        const auto& STATE = Navigator::state();
+        double height = THEME.panelPad * 2.0 + THEME.searchH;
+        if (Navigator::listVisible() && !STATE.helpOpen && !STATE.tuner) {
+            const int count = sc<int>(STATE.results.size());
+            const int rows = std::max(1, std::min(THEME.rows, count - STATE.listOffset));
+            height += GAP + rows * THEME.rowH + (rows - 1) * GAP;
+            if (count > STATE.listOffset + rows)
+                height += footerHeight(THEME);
+        }
+        const double margin = std::min(48.0 * THEME.hudScale, monitorSize.y * 0.08);
+        const double bottom = monitorSize.y - margin;
+        const double top = std::min(monitorSize.y * THEME.top + (height + 24.0) * THEME.hudScale, bottom - 80.0);
+        return CBox{margin, top, std::max(1.0, monitorSize.x - margin * 2.0), std::max(1.0, bottom - top)};
     }
 
     int paletteHit(const Vector2D& point, PHLWINDOW* window) {

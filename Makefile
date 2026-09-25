@@ -1,6 +1,12 @@
 CXX ?= g++
 
 EXTRA_FLAGS =
+ARM64_HOOK_ROOT = .build/deps/funchook
+ifeq ($(shell uname -m),aarch64)
+    EXTRA_FLAGS += -I$(ARM64_HOOK_ROOT)/include
+    ARM64_HOOK_LIBS = $(ARM64_HOOK_ROOT)/build/libfunchook.a $(ARM64_HOOK_ROOT)/build/_deps/capstone-build/libcapstone.a -ldl
+    ARM64_HOOK_DEPS = $(ARM64_HOOK_ROOT)/build/libfunchook.a
+endif
 LUA_PKG ?= $(shell pkg-config --exists 'lua5.4 >= 5.4' && echo lua5.4 || echo lua)
 VERSION_HEADER = .build/PluginVersion.hpp
 VERSION_SCRIPT = scripts/generate-plugin-version.sh
@@ -22,15 +28,15 @@ endif
 
 .PHONY: all clean safe-unload test-tools FORCE
 
-all: $(OBJECTS)
+all: $(OBJECTS) $(ARM64_HOOK_DEPS)
 	@mkdir -p $(dir $(OUT))
-	$(CXX) -shared -fPIC $(EXTRA_FLAGS) $(OBJECTS) -o $(OUT).next -g `pkg-config --libs pangocairo hyprgraphics`
+	$(CXX) -shared -fPIC $(EXTRA_FLAGS) $(OBJECTS) -o $(OUT).next -g `pkg-config --libs pangocairo hyprgraphics` $(ARM64_HOOK_LIBS)
 	mv -f $(OUT).next $(OUT)
 
 # The lens shader is compiled into the plugin (#embed in BarrelShader.cpp).
 $(OBJDIR)/BarrelShader.o: shaders/barrel.frag
 
-$(OBJDIR)/%.o: %.cpp $(VERSION_HEADER) $(wildcard *.hpp)
+$(OBJDIR)/%.o: %.cpp $(VERSION_HEADER) $(wildcard *.hpp) $(ARM64_HOOK_DEPS)
 	@mkdir -p $(OBJDIR)
 	$(CXX) -c $(CXXFLAGS_ALL) $< -o $@
 
@@ -38,6 +44,9 @@ $(VERSION_HEADER): FORCE $(VERSION_SCRIPT)
 	sh $(VERSION_SCRIPT) $@ .
 
 FORCE:
+
+$(ARM64_HOOK_ROOT)/build/libfunchook.a: scripts/build-arm64-hooks.sh
+	bash scripts/build-arm64-hooks.sh
 
 # A scripted virtual mouse for the nested tests (tests/tools/vpointer.c).
 VPOINTER = .build/vpointer
@@ -47,6 +56,10 @@ X11MENU = .build/x11-menu
 X11GAME = .build/x11-game
 
 test-tools: $(VPOINTER) $(X11MENU) $(X11GAME)
+
+.build/swipe-probe.so: tests/tools/swipe-probe.cpp
+	@mkdir -p .build
+	$(CXX) -shared $(CXXFLAGS_ALL) $< -o $@
 
 $(X11MENU): tests/tools/x11-menu.c
 	@mkdir -p .build
